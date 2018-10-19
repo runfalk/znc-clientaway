@@ -36,8 +36,17 @@ public:
     }
 
     CMessage CreateAwayResponse(bool isAway) {
+        auto line = std::string(":irc.znc.in ")
+            .append(std::to_string(isAway ? 306 : 305))
+            .append(" ")
+            .append(GetClient()->GetNick())
+            .append(" :")
+            .append(isAway ?
+                    "Your client is marked as away" :
+                    "Your client is no longer marked as away");
+
         CNumericMessage msg;
-        msg.Parse(std::string(":server ").append(isAway ? "306" : "305"));
+        msg.Parse(line);
         return msg;
     }
 
