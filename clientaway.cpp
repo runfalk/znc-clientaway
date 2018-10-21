@@ -1,4 +1,5 @@
 #include <string>
+#include <sstream>
 
 #include <znc/Client.h>
 #include <znc/IRCNetwork.h>
@@ -9,17 +10,30 @@
 #error The clientaway module requires ZNC version 1.7.0 or later.
 #endif
 
+struct AwaySummary {
+    bool IsAway() {
+        return numAway == numClients;
+    }
+
+    uint16_t numAway;
+    uint16_t numClients;
+};
+
 class ClientAway : public CModule {
 public:
     MODCONSTRUCTOR(ClientAway) {}
 
-    bool AllClientsAway() {
+    AwaySummary GetAwaySummary() {
+        uint16_t numAway = 0;
+        uint16_t numClients = 0;
+
         for (CClient* client : GetNetwork()->GetClients()) {
-            if (!client->IsAway()) {
-                return false;
+            numClients++;
+            if (client->IsAway()) {
+                numAway++;
             }
         }
-        return true;
+        return {numAway, numClients};
     }
 
     CMessage CreateAwayRequest(bool isAway) {
@@ -35,32 +49,33 @@ public:
         return msg;
     }
 
-    CMessage CreateAwayResponse(bool isAway) {
-        auto line = std::string(":irc.znc.in ")
-            .append(std::to_string(isAway ? 306 : 305))
-            .append(" ")
-            .append(GetClient()->GetNick())
-            .append(" :")
-            .append(isAway ?
-                    "Your client is marked as away" :
-                    "Your client is no longer marked as away");
+    CMessage CreateAwayResponse(bool isAway, AwaySummary awaySummary) {
+        std::stringstream line;
+        line << ":irc.znc.in " << (isAway ? 306 : 305)
+             << " "
+             << GetClient()->GetNick()
+             << " :"
+             << "Your client is " << (isAway ? "away" : "back")
+             << " - "
+             << awaySummary.numAway
+             << "/"
+             << awaySummary.numClients
+             << " clients away";
 
         CNumericMessage msg;
-        msg.Parse(line);
+        msg.Parse(line.str());
         return msg;
     }
 
-    void UpdateAwayStatus() {
-        bool allClientsAway = AllClientsAway();
+    void UpdateAwayStatus(AwaySummary awaySummary) {
+        bool allClientsAway = awaySummary.IsAway();
         bool serverAway = GetNetwork()->IsIRCAway();
 
         if (!allClientsAway && serverAway) {
             // Mark ourselves as not away
-            PutStatus("Marking us as not away since at least one client is not away");
             PutIRC(CreateAwayRequest(false));
         } else if (allClientsAway && !serverAway) {
             // Mark ourselves as away
-            PutStatus("Marking us as away since all connected clients are away");
             PutIRC(CreateAwayRequest(true));
         }
     }
@@ -70,7 +85,7 @@ public:
         if (client != nullptr) {
             client->SetAway(false);
         }
-        UpdateAwayStatus();
+        UpdateAwayStatus(GetAwaySummary());
     }
 
     void OnClientDisconnect() {
@@ -78,7 +93,7 @@ public:
         if (client != nullptr) {
             client->SetAway(true);
         }
-        UpdateAwayStatus();
+        UpdateAwayStatus(GetAwaySummary());
     }
 
     EModRet OnUserRawMessage(CMessage& msg) {
@@ -97,14 +112,10 @@ public:
         // Here we act as the real IRC server would and reply to the away
         // request which makes the client think it is marked as away
         client->SetAway(isAway);
-        PutUser(CreateAwayResponse(isAway).ToString());
-        if (isAway) {
-            PutStatus("Your client is marked as away");
-        } else {
-            PutStatus("Your client is marked as present");
-        }
+        AwaySummary awaySummary = GetAwaySummary();
+        PutUser(CreateAwayResponse(isAway, awaySummary).ToString());
 
-        UpdateAwayStatus();
+        UpdateAwayStatus(awaySummary);
         return HALTCORE;
     }
 
